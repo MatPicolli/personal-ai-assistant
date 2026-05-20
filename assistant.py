@@ -37,7 +37,9 @@ DEFAULT_MODEL = "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL"
 DEFAULT_HOST = "http://127.0.0.1:11434"
 DEFAULT_CWD = "/home/mateus" if os.path.isdir("/home/mateus") else os.path.expanduser("~")
 MAX_TOOL_ROUNDS = 8
-CHAT_DIR = os.path.join(DEFAULT_CWD, ".local", "share", "picoassistant", "chats")
+DATA_DIR = os.path.join(DEFAULT_CWD, ".local", "share", "picoassistant")
+CHAT_DIR = os.path.join(DATA_DIR, "chats")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 CONTEXT_FILES = [
     os.path.join(DEFAULT_CWD, "README.md"),
     os.path.join(DEFAULT_CWD, "AGENTS.md"),
@@ -312,6 +314,77 @@ def ensure_chat_dir() -> None:
     os.makedirs(CHAT_DIR, exist_ok=True)
 
 
+def ensure_data_dir() -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def load_settings() -> dict[str, Any]:
+    if not os.path.isfile(SETTINGS_FILE):
+        return {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(settings: dict[str, Any]) -> None:
+    ensure_data_dir()
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as handle:
+        json.dump(settings, handle, ensure_ascii=False, indent=2)
+
+
+def save_current_model(model: str) -> None:
+    settings = load_settings()
+    settings["model"] = model
+    settings["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save_settings(settings)
+
+
+def installed_ollama_models() -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["ollama", "list"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0:
+        return []
+    models: list[str] = []
+    for line in completed.stdout.splitlines()[1:]:
+        parts = line.split()
+        if parts:
+            models.append(parts[0])
+    return models
+
+
+def ollama_model_installed(model: str) -> bool:
+    return model in installed_ollama_models()
+
+
+def pull_ollama_model(model: str, config: Config) -> tuple[bool, str]:
+    print(paint(f"\n[model] Installing {model} with ollama pull. This can take a while.", Style.TRACE, config))
+    try:
+        completed = subprocess.run(
+            ["ollama", "pull", model],
+            text=True,
+            capture_output=True,
+            timeout=60 * 60,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "ollama pull timed out after 1 hour."
+    except OSError as exc:
+        return False, str(exc)
+    output = (completed.stdout + completed.stderr).strip()
+    if completed.returncode != 0:
+        return False, output[-4000:] or f"ollama pull exited with {completed.returncode}."
+    return True, output[-4000:]
+
+
 def save_chat(name: str, history: list[dict[str, str]], config: Config) -> str:
     ensure_chat_dir()
     path = chat_path(name)
@@ -375,7 +448,7 @@ def command_help() -> str:
 /resume <name>       load a saved chat
 /chats               list saved chats
 /tools               show available tools
-/model               show the active model and terminal mode
+/model [name|list]   show, switch, or install Ollama models
 /context             show loaded context files
 /trace [on|off]      toggle dim-gray activity trace
 /thinking [on|off]   toggle public extended thinking summaries
@@ -447,7 +520,32 @@ def handle_slash_command(
 - web.fetch""", config)
         return True, history, session_name, False
     if command == "/model":
-        print_ai(f"Model: `{config.model}`\nTerminal mode: `{config.terminal_mode}`\nCWD: `{config.cwd}`", config)
+        if not arg:
+            print_ai(f"Model: `{config.model}`\nTerminal mode: `{config.terminal_mode}`\nCWD: `{config.cwd}`\nSaved model file: `{SETTINGS_FILE}`", config)
+            return True, history, session_name, False
+        if arg.lower() in {"list", "ls"}:
+            models = installed_ollama_models()
+            if not models:
+                print_ai("No installed Ollama models were found, or `ollama list` failed.", config)
+            else:
+                lines = ["Installed Ollama models:"]
+                for model in models:
+                    marker = "*" if model == config.model else "-"
+                    lines.append(f"{marker} `{model}`")
+                print_ai("\n".join(lines), config)
+            return True, history, session_name, False
+
+        requested_model = arg
+        if not ollama_model_installed(requested_model):
+            print_ai(f"Model `{requested_model}` is not installed. Installing it with `ollama pull` now.", config)
+            ok, output = pull_ollama_model(requested_model, config)
+            if not ok:
+                print_ai(f"Failed to install `{requested_model}`.\n\n```text\n{output}\n```", config)
+                return True, history, session_name, False
+
+        config.model = requested_model
+        save_current_model(requested_model)
+        print_ai(f"Using model `{requested_model}`. Pico will use this model next time too.", config)
         return True, history, session_name, False
     if command == "/context":
         print_ai(loaded_context_summary(), config)
@@ -1251,7 +1349,7 @@ def parse_args() -> Config:
             """
         ),
     )
-    parser.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", default=None, help="Override the saved/default Ollama model for this run.")
     parser.add_argument("--host", default=os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
     parser.add_argument("--cwd", default=DEFAULT_CWD)
     mode = parser.add_mutually_exclusive_group()
@@ -1269,13 +1367,16 @@ def parse_args() -> Config:
     parser.add_argument("--trace", action="store_true", help="Show dim-gray activity trace for tool calls and final-answer boundaries.")
     parser.add_argument("--thinking", action="store_true", help="Show public extended thinking summaries before tool calls and final answers.")
     args = parser.parse_args()
+    settings = load_settings()
+    saved_model = settings.get("model") if isinstance(settings.get("model"), str) else None
+    selected_model = args.model or os.environ.get("OLLAMA_MODEL") or saved_model or DEFAULT_MODEL
     terminal_mode = "ask"
     if args.safe_auto_terminal:
         terminal_mode = "safe"
     if args.auto_approve_terminal:
         terminal_mode = "auto"
     return Config(
-        model=args.model,
+        model=selected_model,
         host=args.host,
         cwd=normalize_path(args.cwd, DEFAULT_CWD),
         terminal_mode=terminal_mode,

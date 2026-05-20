@@ -28,17 +28,35 @@ pico
 
 The terminal command is installed at `~/.local/bin/pico`. The old `Picoassistant` command forwards to `pico` for compatibility.
 
-Your installed model is used by default:
+Pico uses the last model selected with `/model <name>`. If no model has been saved yet, it falls back to:
 
 ```text
 hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-Q4_K_XL
 ```
 
-Override it with:
+Override it for one run with:
 
 ```bash
 OLLAMA_MODEL='model-name-here' ./assistant.py
 ```
+
+Model settings are stored in:
+
+```text
+~/.local/share/picoassistant/settings.json
+```
+
+## Model Switching
+
+Inside Pico:
+
+```text
+/model                         show the current model
+/model list                    list installed Ollama models
+/model llama3.2:3b             switch to a model
+```
+
+If the requested model is not installed, Pico runs `ollama pull <model>` automatically. After a successful switch, Pico saves the model and uses it on the next startup.
 
 ## Local Context
 
@@ -60,7 +78,7 @@ Use `/context` inside Pico to check which context files are available. Edit `~/R
 /resume <name>       load a saved chat
 /chats               list saved chats
 /tools               show available tools
-/model               show the active model and terminal mode
+/model [name|list]   show, switch, or install Ollama models
 /context             show loaded context files
 /trace [on|off]      toggle dim-gray activity trace
 /thinking [on|off]   toggle public extended thinking summaries
