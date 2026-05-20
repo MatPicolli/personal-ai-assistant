@@ -131,6 +131,9 @@ class Style:
     TRACE = "\033[90m"
     GRAY_BG = "\033[48;5;238m"
     CODE_BG = "\033[48;5;236m"
+    DIFF_ADD = "\033[30;48;5;22m"
+    DIFF_REMOVE = "\033[37;48;5;52m"
+    DIFF_META = "\033[90m"
 
 
 def paint(text: str, style: str, config: Config) -> str:
@@ -192,6 +195,22 @@ def print_user_box(text: str, config: Config) -> None:
     print(paint(top, Style.GRAY_BG, config))
 
 
+def format_diff_text(text: str, config: Config) -> str:
+    if not config.color:
+        return text
+    formatted: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+            formatted.append(paint(line, Style.DIFF_META, config))
+        elif line.startswith("+"):
+            formatted.append(paint(line, Style.DIFF_ADD, config))
+        elif line.startswith("-"):
+            formatted.append(paint(line, Style.DIFF_REMOVE, config))
+        else:
+            formatted.append(line)
+    return "\n".join(formatted)
+
+
 def format_ai_text(text: str, config: Config) -> str:
     if not config.color:
         return text
@@ -203,6 +222,12 @@ def format_ai_text(text: str, config: Config) -> str:
         if stripped.startswith("```"):
             in_code = not in_code
             formatted.append(paint(line, Style.DIM, config))
+        elif stripped.startswith(("+++", "---", "@@")):
+            formatted.append(paint(line, Style.DIFF_META, config))
+        elif line.startswith("+") and not line.startswith("+++"):
+            formatted.append(paint(line, Style.DIFF_ADD, config))
+        elif line.startswith("-") and not line.startswith("---"):
+            formatted.append(paint(line, Style.DIFF_REMOVE, config))
         elif in_code:
             formatted.append(paint(line, Style.CODE_BG, config))
         elif re.match(r"^#{1,6}\s+", stripped):
@@ -882,7 +907,7 @@ def file_patch(arguments: dict[str, Any], config: Config) -> dict[str, Any]:
     )
     print(f"\n[file.patch] {path}")
     if diff:
-        print(diff[-4000:])
+        print(format_diff_text(diff[-4000:], config))
     if not prompt_yes_no("Apply this patch?"):
         return {"ok": False, "error": "Mateus declined to apply the patch.", "path": path}
 

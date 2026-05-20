@@ -120,6 +120,7 @@ Pico uses ANSI terminal formatting when stdout is a TTY:
 
 - your messages are repeated in a gray box
 - Pico replies use light Markdown-style coloring
+- diff additions use a green background and removals use a red background
 - a small spinner appears while the model is thinking
 
 Set `NO_COLOR=1` to disable colors.
